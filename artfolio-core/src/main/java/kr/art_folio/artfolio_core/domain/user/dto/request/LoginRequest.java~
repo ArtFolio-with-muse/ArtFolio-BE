@@ -1,0 +1,9 @@
+package kr.art_folio.artfolio_core.domain.user.dto.request;
+
+import lombok.Data;
+
+@Data
+public class User {
+    private String loginId;
+    private String password;
+}
