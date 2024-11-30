@@ -1,6 +1,7 @@
 package kr.art_folio.artfolio_core.domain.user.entity;
 
 import jakarta.persistence.*;
+import kr.art_folio.artfolio_core.grobal.common.entity.Status;
 import lombok.*;
 
 @Data
@@ -29,6 +30,7 @@ public class User {
 
     private String profileImageUrl;
 
+    @Column(name = "profile_image_url")
     private String description;
 
     @Enumerated(EnumType.STRING)
@@ -48,4 +50,26 @@ public class User {
         return user;
     }
 
+    /**
+     * 사용자 정보 업데이트
+     * @param nickname 새로운 닉네임
+     * @param password 새로운 비밀번호
+     * @param imageUrl 새로운 이미지 URL
+     */
+    public void updateInfo(String nickname, String password, String imageUrl) {
+        if (nickname != null && !nickname.isBlank()) {
+            this.nickname = nickname;
+        }
+        if (password != null && !password.isBlank()) {
+            this.password = password;
+        }
+        this.profileImageUrl = profileImageUrl; // 이미지 URL은 null 허용 (삭제 가능)
+    }
+
+    /**
+     * 사용자 삭제 처리
+     */
+    public void delete() {
+        this.status = Status.DELETE; // 상태를 DELETED로 변경
+    }
 }

@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import kr.art_folio.artfolio_core.domain.user.service.UserService;
@@ -35,7 +36,7 @@ public class UserController {
 
     @PutMapping("/users")
     public ResponseEntity<UserResponse> modify(
-            @Parameter @AuthenticationPrincipal DofarmingUserDetails user,
+            @Parameter @AuthenticationPrincipal UserDetails user,
             @Parameter @RequestPart(required = false) MultipartFile multipartFile,
             @Parameter @Valid @RequestPart UserModifyRequest userModifyRequest
     ) {

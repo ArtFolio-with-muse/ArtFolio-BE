@@ -4,8 +4,12 @@ import kr.art_folio.artfolio_core.domain.user.dto.request.UserModifyRequest;
 import kr.art_folio.artfolio_core.domain.user.dto.request.UserSignUpRequest;
 import kr.art_folio.artfolio_core.domain.user.dto.response.UserResponse;
 import kr.art_folio.artfolio_core.domain.user.entity.Role;
+import kr.art_folio.artfolio_core.grobal.common.entity.Status;
 import kr.art_folio.artfolio_core.domain.user.entity.User;
 import kr.art_folio.artfolio_core.domain.user.repository.UserRepository;
+import kr.art_folio.artfolio_core.domain.user.util.ImageUtil;
+import kr.art_folio.artfolio_core.grobal.custom.CustomException;
+import kr.art_folio.artfolio_core.grobal.error.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -14,7 +18,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.file.Path;
-import java.nio.file.Paths;
 
 @Service
 @Transactional(readOnly = true)
@@ -31,68 +34,79 @@ public class UserService {
      */
     @Transactional
     public Long createUser(UserSignUpRequest userSignUpRequest) {
-        isDuplicateEmail(userSignUpRequest.email(), Role.ARTIST);
+        // 이메일 중복 확인
+        validateDuplicateEmail(userSignUpRequest.email());
 
-        User user = User.user(userSignUpRequest.email(), name, userSignUpRequest.password());
-        User saveUser = userRepository.save(user);
+        // 비밀번호 유효성 검사 및 암호화
+        String encodedPassword = encoder.encode(userSignUpRequest.password());
 
+        // User 엔티티 생성
+        User user = User.builder()
+                .email(userSignUpRequest.email())
+                .nickname(userSignUpRequest.nickname())
+                .password(encodedPassword)
+                .role(Role.ARTIST)
+                .build();
 
-        return saveUser.getId();
+        // User 저장
+        User savedUser = userRepository.save(user);
+
+        // 저장된 User ID 반환
+        return savedUser.getId();
     }
+
 
     /**
      * 회원 수정
      */
     @Transactional
     public UserResponse updateUser(Long userId, MultipartFile file, UserModifyRequest userModifyRequest) {
-        User user = existByUserId(userId);
+        User user = findActiveUserById(userId);
 
-        /*
-         * 패스워드 처리
-         */
-        String userPassword = user.getPassword();
-        if (userModifyRequest.password() != null && !encoder.matches(userModifyRequest.password(), userPassword)) {
-            userPassword = encoder.encode(userModifyRequest.password());
-        }
+        // 패스워드 갱신
+        String updatedPassword = updatePassword(user, userModifyRequest.password());
 
-        /*
-         * 이미지 생성
-         */
-        if (file == null) {
-            user.updateInfo(userModifyRequest.nickname(), userPassword, user.getImageUrl());
+        // 이미지 처리
+        String updatedImageUrl = updateImage(user, file);
 
-        } else if (file.isEmpty()) {
-            // 이미지가 존재하면 삭제
-            deleteUserImageFIle(user);
-            // 유저 업데이트
-            user.updateInfo(userModifyRequest.nickname(), userPassword, null);
+        // 사용자 정보 업데이트
+        user.updateInfo(userModifyRequest.nickname(), updatedPassword, updatedImageUrl);
 
-        } else {
-            String imageUrl = imageUtil.getImageUrl(file);
-
-            Path path = imageUtil.makeFilePath(imageUrl);
-
-            // 이미지가 존재하면 삭제
-            deleteUserImageFIle(user);
-            // 경로에 이미지 쓰기
-            imageUtil.writeImageFile(path, file);
-
-            user.updateInfo(userModifyRequest.nickname(), userPassword, imageUrl);
-        }
-
-        return UserResponse.builder()
-                .userId(user.getUserId())
-                .email(user.getEmail())
-                .imageUrl(user.getImageUrl())
-                .nickname(user.getNickname())
-                .build();
+        return UserResponse.of(user);
     }
 
-    private void deleteUserImageFIle(User user) {
-        if (user.getImageUrl() != null) {
-            // 유저의 이미지 삭제
-            Path existImageFilePath = Paths.get(user.getImageUrl());
-            imageUtil.deleteImageUrl(existImageFilePath);
+
+    private String updatePassword(User user, String newPassword) {
+        if (newPassword != null && !encoder.matches(newPassword, user.getPassword())) {
+            return encoder.encode(newPassword);
+        }
+        return user.getPassword();
+    }
+
+    private String updateImage(User user, MultipartFile file) {
+        if (file == null) {
+            return user.getProfileImageUrl(); // 기존 이미지 유지
+        }
+
+        if (file.isEmpty()) {
+            deleteImageFile(user.getProfileImageUrl());
+            return null; // 이미지 제거
+        }
+
+        String imageUrl = imageUtil.getImageUrl(file);
+        Path imagePath = imageUtil.makeFilePath(imageUrl);
+
+        // 기존 이미지 삭제 및 새 이미지 저장
+        deleteImageFile(user.getProfileImageUrl());
+        imageUtil.writeImageFile(imagePath, file);
+
+        return imageUrl;
+    }
+
+    private void deleteImageFile(String imageUrl) {
+        if (imageUrl != null) {
+            Path imagePath = Path.of(imageUrl);
+            imageUtil.deleteImageUrl(imagePath);
         }
     }
 
@@ -100,8 +114,9 @@ public class UserService {
      * 회원 삭제
      */
     @Transactional
-    public void userDelete(Long userId) {
-        User user = existByUserId(userId);
+    public void deleteUser(Long userId) {
+        User user = findActiveUserById(userId);
+        deleteImageFile(user.getProfileImageUrl());
         user.delete();
     }
 
@@ -109,22 +124,35 @@ public class UserService {
      * 회원 조회
      */
     public UserResponse getUser(Long userId) {
-        User user = existByUserId(userId);
-        return UserResponse.builder()
-                .userId(user.getUserId())
-                .email(user.getEmail())
-                .imageUrl(user.getImageUrl())
-                .nickname(user.getNickname())
-                .build();
+        User user = findActiveUserById(userId);
+        return UserResponse.of(user);
     }
 
-    private User existByUserId(Long userId) {
+    private User findActiveUserById(Long userId) {
         return userRepository.findByUserIdAndStatus(userId, Status.ACTIVE)
-                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND, "User not found."));
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND, "사용자를 찾을 수 없습니다. ID: " + userId));
     }
 
-    private void isDuplicateEmail(String email, Role role) {
-        userRepository.findByEmailAndRoleAndStatus(email, role, Status.ACTIVE)
-                .ifPresent(user -> { throw new CustomException(ErrorCode.DUPLICATE_OBJECT, "Email already exists."); });
+    private void validateDuplicateEmail(String email) {
+        userRepository.findByEmailAndRoleAndStatus(email, Role.ARTIST, Status.ACTIVE)
+                .ifPresent(user -> {
+                    throw new CustomException(ErrorCode.DUPLICATE_OBJECT, "이미 사용 중인 이메일입니다: " + email);
+                });
+    }
+
+    private void validateDuplicateNickname(String nickname) {
+        userRepository.findByNicknameAndStatus(nickname, Status.ACTIVE)
+                .ifPresent(user -> {
+                    throw new CustomException(ErrorCode.DUPLICATE_OBJECT, "이미 사용 중인 닉네임입니다: " + nickname);
+                });
+    }
+
+    private void validatePassword(String password) {
+        if (password.length() < 8) {
+            throw new CustomException(ErrorCode.INVALID_INPUT, "비밀번호는 최소 8자 이상이어야 합니다.");
+        }
+        if (!password.matches(".*[!@#$%^&*].*")) {
+            throw new CustomException(ErrorCode.INVALID_INPUT, "비밀번호에는 적어도 하나의 특수 문자가 포함되어야 합니다.");
+        }
     }
 }
